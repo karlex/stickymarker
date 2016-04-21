@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="stylesheet" href="http://cdn.leafletjs.com/leaflet/v0.7.7/leaflet.css" />
+	<style type="text/css">
+		html, body, #map { margin: 0; padding: 0; width: 100%; height: 90%; }
+	</style>
+</head>
+<body>
+	<button id="locateBtn" type="button" disabled>Locate</button>
+
+	<div id="map"></div>
+
+	<script src="./tinyqueue.js"></script>
+	<script src="./rbush.js"></script>
+	<script src="./rbush-knn.js"></script>
+
+	<script src="http://cdn.leafletjs.com/leaflet/v0.7.7/leaflet.js"></script>
+	<script src="https://code.jquery.com/jquery-2.2.3.min.js"></script>
+	<script>
+		var marker = null;
+		var tree = null;
+		var map = L.map('map').setView([51.5, -0.09], 13);
+
+		L.tileLayer('http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+		    attribution: '&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
+		}).addTo(map);
+
+		var locateBtn = document.getElementById('locateBtn');
+		locateBtn.addEventListener('click', function() {
+			if (marker == null) {
+				marker = L.marker([0, 0], { clickable: false });
+			}
+		});
+
+		map.on('mouseover', function(event) {
+			if (marker != null) {
+				marker.setLatLng(event.latlng).addTo(map);
+			}
+		});
+
+		map.on('mouseout', function(event) {
+			if (marker != null) {
+				map.removeLayer(marker);
+			}
+		});
+
+		map.on('mousemove', function(event) {
+			if (marker != null) {
+				// add offset to make marker's tip visible
+				var markerPoint = map.latLngToLayerPoint(event.latlng).add(L.point([0, 20]));
+				var markerLatLng = map.layerPointToLatLng(markerPoint);
+				var neighbors = knn(tree, [markerLatLng.lng, markerLatLng.lat], 1);
+				
+				if (neighbors.length > 0) {
+					var neighbor = neighbors[0];
+					var p1 = map.latLngToLayerPoint(L.latLng(neighbor[1], neighbor[0]));
+					var p2 = map.latLngToLayerPoint(L.latLng(neighbor[3], neighbor[2]));
+					var distance = L.LineUtil.pointToSegmentDistance(markerPoint, p1, p2);
+
+					if (distance < 4) {
+						var closestPoint = L.LineUtil.closestPointOnSegment(markerPoint, p1, p2);
+						marker.setLatLng(map.layerPointToLatLng(closestPoint));
+						return;
+					} 
+				}
+				
+				marker.setLatLng(markerLatLng);
+			}
+		});
+
+		map.on('click', function(event) {
+			if (marker != null) {
+				marker = null;
+			}
+		});
+
+		$.getJSON('http://kosmosnimki.ru/downloads/tasks_2016/regions_rf.geojson').done(function(geoJson) {
+			var geoJsonLayerGroup = L.geoJson(geoJson, {
+				style: function(feature) {
+					return { 
+						weight: 1, 
+						clickable: false 
+					};
+				}
+			});
+
+			geoJsonLayerGroup.addTo(map);
+
+			map.fitBounds(geoJsonLayerGroup.getBounds());
+
+			tree = createTreeFromLayerGroup(geoJsonLayerGroup);
+
+			locateBtn.disabled = false;
+		});
+
+		function createTreeFromLayerGroup(layerGroup) {
+			var data = [];
+			
+			var layers = layerGroup.getLayers();
+
+			for (var i = 0; i < layers.length; i++) {
+				appendLatLngsToTreeData(data, layers[i].getLatLngs())
+			}
+
+			return rbush().load(data);
+		}
+
+		function appendLatLngsToTreeData(data, latLngs) {			
+			if (latLngs.length <= 0) return;
+
+			if (Array.isArray(latLngs[0])) {
+				for (var j = 0; j < latLngs.length; j++) {
+					appendLatLngsToTreeData(data, latLngs[j]);
+				}
+			} else {
+				for (var j = 0; j < latLngs.length - 1; j++) {
+					var p1 = latLngs[j];
+					var p2 = latLngs[j + 1];
+					data[data.length] = [p1.lng, p1.lat, p2.lng, p2.lat];
+				}
+
+				var firstPoint = latLngs[0];
+				var lastPoint = latLngs[latLngs.length - 1];
+				if (!latLngsAreEqual(firstPoint, lastPoint)) {
+					data[data.length] = [firstPoint.lng, firstPoint.lat, lastPoint.lng, lastPoint.lat];	
+				}
+			}
+		}
+
+		function latLngsAreEqual(a, b) {
+			return a.lat === b.lat && a.lng === b.lng;
+		}
+	</script>
+</body>
+</html>
